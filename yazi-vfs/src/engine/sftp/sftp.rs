@@ -7,7 +7,7 @@ use yazi_fs::{engine::{Capabilities, DirReader, Engine, FileBuilder, FileHolder,
 use yazi_sftp::fs::Attrs;
 use yazi_shared::{auth::AuthKind, path::{DynPath, PathBufDyn}, strand::AsStrand, url::{AsUrl, Url, UrlBuf, UrlCow, UrlLike}};
 
-use super::Stat;
+use super::{ServerCopier, Stat};
 use crate::engine::{ProgressiveCopier, sftp::Conn};
 
 pub struct Sftp<'a> {
@@ -86,7 +86,11 @@ impl<'a> Engine for Sftp<'a> {
 			return Ok(Transit::unsupported());
 		}
 
-		Ok(ProgressiveCopier::spawn(self.to_url(), to.into(), attrs))
+		Ok(if self.op().await?.supports_extension("copy-data") {
+			ServerCopier::spawn(self.to_url(), to.into(), attrs)
+		} else {
+			ProgressiveCopier::spawn(self.to_url(), to.into(), attrs)
+		})
 	}
 
 	async fn copy_from(&self, from: Url<'_>, attrs: yazi_fs::engine::Attrs) -> io::Result<Transit> {

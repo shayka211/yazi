@@ -28,6 +28,7 @@ pub enum Packet<'a> {
 	ExtendedRename(requests::Extended<'a, requests::ExtendedRename<'a>>),
 	ExtendedFsync(requests::Extended<'a, requests::ExtendedFsync<'a>>),
 	ExtendedHardlink(requests::Extended<'a, requests::ExtendedHardlink<'a>>),
+	ExtendedCopyData(requests::Extended<'a, requests::ExtendedCopyData<'a>>),
 	ExtendedLimits(requests::Extended<'a, requests::ExtendedLimits>),
 
 	// Responses
@@ -63,6 +64,7 @@ impl_from_packet! {
 	ExtendedRename(requests::Extended<'a, requests::ExtendedRename<'a>>),
 	ExtendedFsync(requests::Extended<'a, requests::ExtendedFsync<'a>>),
 	ExtendedHardlink(requests::Extended<'a, requests::ExtendedHardlink<'a>>),
+	ExtendedCopyData(requests::Extended<'a, requests::ExtendedCopyData<'a>>),
 	ExtendedLimits(requests::Extended<'a, requests::ExtendedLimits>),
 
 	// Responses
@@ -110,6 +112,7 @@ impl Packet<'_> {
 			Self::ExtendedRename(_) => 200,
 			Self::ExtendedFsync(_) => 200,
 			Self::ExtendedHardlink(_) => 200,
+			Self::ExtendedCopyData(_) => 200,
 			Self::ExtendedLimits(_) => 200,
 
 			// Responses
@@ -147,6 +150,7 @@ impl Packet<'_> {
 			Self::ExtendedRename(v) => v.id,
 			Self::ExtendedFsync(v) => v.id,
 			Self::ExtendedHardlink(v) => v.id,
+			Self::ExtendedCopyData(v) => v.id,
 			Self::ExtendedLimits(v) => v.id,
 
 			// Responses
@@ -184,6 +188,7 @@ impl Packet<'_> {
 			Self::ExtendedRename(v) => v.id = id,
 			Self::ExtendedFsync(v) => v.id = id,
 			Self::ExtendedHardlink(v) => v.id = id,
+			Self::ExtendedCopyData(v) => v.id = id,
 			Self::ExtendedLimits(v) => v.id = id,
 
 			// Responses
@@ -223,6 +228,7 @@ impl Packet<'_> {
 			Self::ExtendedRename(v) => type_len + v.len(),
 			Self::ExtendedFsync(v) => type_len + v.len(),
 			Self::ExtendedHardlink(v) => type_len + v.len(),
+			Self::ExtendedCopyData(v) => type_len + v.len(),
 			Self::ExtendedLimits(v) => type_len + v.len(),
 
 			// Responses

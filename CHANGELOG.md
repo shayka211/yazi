@@ -58,6 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/):
 
 ### Improved
 
+- Server-side copy for SFTP files via the `copy-data` extension ([#])
 - Rearm file copier ([#4424])
 - Switch Lua to generational GC ([#4397])
 - Asyncly parse the entry arguments to avoid blocking app startup ([#4352])

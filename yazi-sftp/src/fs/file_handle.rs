@@ -22,6 +22,21 @@ impl FileHandle {
 		self.op.fsetstat(&self.handle, attrs).await
 	}
 
+	pub async fn copy_data(
+		&self,
+		offset: u64,
+		len: u64,
+		to: &Self,
+		to_offset: u64,
+	) -> Result<(), Error> {
+		// Handles are only meaningful within the session that opened them
+		if !Arc::ptr_eq(&*self.op, &*to.op) {
+			return Err(Error::custom("cannot copy data between different sessions"));
+		}
+
+		self.op.copy_data(&self.handle, offset, len, &to.handle, to_offset).await
+	}
+
 	pub(super) fn read(&self, offset: u64, len: u32) -> Result<Receiver, Error> {
 		self.op.read(&self.handle, offset, len)
 	}

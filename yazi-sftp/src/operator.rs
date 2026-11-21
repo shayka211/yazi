@@ -141,7 +141,7 @@ impl Operator {
 		F: AsSftpPath<'a>,
 		T: AsSftpPath<'a>,
 	{
-		if self.extensions.lock().get("posix-rename@openssh.com").is_none_or(|s| s != "1") {
+		if !self.supports_extension("posix-rename@openssh.com") {
 			return Err(Error::Unsupported);
 		}
 
@@ -173,7 +173,7 @@ impl Operator {
 	}
 
 	pub(crate) fn fsync(&self, handle: &str) -> Result<Receiver, Error> {
-		if self.extensions.lock().get("fsync@openssh.com").is_none_or(|s| s != "1") {
+		if !self.supports_extension("fsync@openssh.com") {
 			return Err(Error::Unsupported);
 		}
 
@@ -186,7 +186,7 @@ impl Operator {
 		O: AsSftpPath<'a>,
 		L: AsSftpPath<'a>,
 	{
-		if self.extensions.lock().get("hardlink@openssh.com").is_none_or(|s| s != "1") {
+		if !self.supports_extension("hardlink@openssh.com") {
 			return Err(Error::Unsupported);
 		}
 
@@ -194,5 +194,26 @@ impl Operator {
 		let status: responses::Status =
 			self.send(requests::Extended::new("hardlink@openssh.com", data)).await?;
 		status.into()
+	}
+
+	pub(crate) async fn copy_data(
+		&self,
+		from: &str,
+		from_offset: u64,
+		len: u64,
+		to: &str,
+		to_offset: u64,
+	) -> Result<(), Error> {
+		if !self.supports_extension("copy-data") {
+			return Err(Error::Unsupported);
+		}
+
+		let data = requests::ExtendedCopyData::new(from, from_offset, len, to, to_offset);
+		let status: responses::Status = self.send(requests::Extended::new("copy-data", data)).await?;
+		status.into()
+	}
+
+	pub fn supports_extension(&self, extension: &str) -> bool {
+		self.extensions.lock().get(extension).is_some_and(|s| s == "1")
 	}
 }

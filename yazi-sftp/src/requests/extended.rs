@@ -85,6 +85,37 @@ impl ExtendedData for ExtendedHardlink<'_> {
 	fn len(&self) -> usize { 4 + self.original.len() + 4 + self.link.len() }
 }
 
+// --- Copy data
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ExtendedCopyData<'a> {
+	from:        Cow<'a, str>,
+	from_offset: u64,
+	len:         u64,
+	to:          Cow<'a, str>,
+	to_offset:   u64,
+}
+
+impl<'a> ExtendedCopyData<'a> {
+	pub(crate) fn new<F, T>(from: F, from_offset: u64, len: u64, to: T, to_offset: u64) -> Self
+	where
+		F: Into<Cow<'a, str>>,
+		T: Into<Cow<'a, str>>,
+	{
+		Self { from: from.into(), from_offset, len, to: to.into(), to_offset }
+	}
+}
+
+impl ExtendedData for ExtendedCopyData<'_> {
+	fn len(&self) -> usize {
+		4 + self.from.len()
+			+ size_of_val(&self.from_offset)
+			+ size_of_val(&self.len)
+			+ 4
+			+ self.to.len()
+			+ size_of_val(&self.to_offset)
+	}
+}
+
 // --- Limits
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ExtendedLimits;
