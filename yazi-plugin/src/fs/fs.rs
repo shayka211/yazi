@@ -1,12 +1,12 @@
 use std::{borrow::Cow, str::FromStr};
 
 use mlua::{BorrowedBytes, ExternalError, Function, IntoLua, IntoLuaMulti, Lua, LuaString, Table, Value};
-use yazi_binding::{Composer, ComposerGet};
+use yazi_binding::{Composer, ComposerGet, process::Output};
 use yazi_config::Pattern;
-use yazi_fs::{engine::{Attrs, DirReader, FileHolder}, file::File, files::Files, mounts::PARTITIONS};
-use yazi_shared::url::{UrlBuf, UrlCow, UrlLike, UrlRef};
+use yazi_fs::{engine::{Attrs, DirReader, Engine, FileHolder}, file::File, files::Files, mounts::PARTITIONS};
+use yazi_shared::url::{AsUrl, UrlBuf, UrlCow, UrlLike, UrlRef};
 use yazi_shim::fs::Error;
-use yazi_vfs::engine::{self, RwFile};
+use yazi_vfs::engine::{self, RwFile, sftp::Sftp};
 
 use crate::fs::SizeCalculator;
 
@@ -24,6 +24,7 @@ pub(crate) fn compose() -> Composer<ComposerGet> {
 			b"create_file" => create_file(lua)?,
 			b"create_file_new" => create_file_new(lua)?,
 			b"cwd" => cwd(lua)?,
+			b"exec" => exec(lua)?,
 			b"expand_url" => expand_url(lua)?,
 			b"file" => file(lua)?,
 			b"lstat" => lstat(lua)?,
@@ -142,6 +143,14 @@ fn cwd(lua: &Lua) -> mlua::Result<Function> {
 }
 
 #[allow(irrefutable_let_patterns)]
+fn exec(lua: &Lua) -> mlua::Result<Function> {
+	lua.create_async_function(|_, (url, command): (UrlRef, BorrowedBytes)| async move {
+		let result = async { Sftp::new(url.as_url()).await?.exec(&command).await }.await;
+
+		Ok(result.map(Output::new).map_err(Error::from))
+	})
+}
+
 fn expand_url(lua: &Lua) -> mlua::Result<Function> {
 	lua.create_function(|lua, value: Value| {
 		use yazi_fs::path::expand_url;

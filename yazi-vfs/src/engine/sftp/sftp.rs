@@ -1,4 +1,4 @@
-use std::{io, sync::Arc};
+use std::{io, process::Output, sync::Arc};
 
 use deadpool::managed::PoolError;
 use typed_path::UnixPath;
@@ -7,7 +7,7 @@ use yazi_fs::{engine::{Capabilities, DirReader, Engine, FileBuilder, FileHolder,
 use yazi_sftp::fs::Attrs;
 use yazi_shared::{auth::AuthKind, path::{DynPath, PathBufDyn}, strand::AsStrand, url::{AsUrl, Url, UrlBuf, UrlCow, UrlLike}};
 
-use super::{ServerCopier, Stat};
+use super::{ServerCopier, Ssh, Stat};
 use crate::engine::{ProgressiveCopier, sftp::Conn};
 
 pub struct Sftp<'a> {
@@ -229,6 +229,10 @@ impl<'a> Engine for Sftp<'a> {
 }
 
 impl<'a> Sftp<'a> {
+	pub async fn exec(&self, command: &[u8]) -> io::Result<Output> {
+		Ssh::make(&self.config).await?.exec(command).await
+	}
+
 	pub(super) async fn op(&self) -> io::Result<deadpool::managed::Object<Conn>> {
 		self.pool.get().await.map_err(|e| match e {
 			PoolError::Timeout(_) => io::Error::new(io::ErrorKind::TimedOut, e.to_string()),

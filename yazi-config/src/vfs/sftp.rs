@@ -3,7 +3,7 @@ use std::{env, ops::Deref, path::PathBuf};
 use mlua::UserData;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use yazi_fs::path::sanitize_path;
-use yazi_shared::auth::{Auth, AuthArc};
+use yazi_shared::{auth::{Auth, AuthArc}, domain::Domain};
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct ServiceSftp {
@@ -22,6 +22,7 @@ pub struct ServiceSftp {
 	pub no_cert_verify: bool,
 	#[serde(default = "default_identity_agent", deserialize_with = "deserialize_identity_agent")]
 	pub identity_agent: PathBuf,
+	pub proxy_jump:     Option<Domain<'static>>,
 }
 
 impl Deref for ServiceSftp {

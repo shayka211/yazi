@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/):
 
 ### Added
 
+- SFTP jump hosts via `proxy_jump` ([#])
+- New `fs.exec()` API to run commands on SFTP servers ([#])
 - Compress files ([#4477])
 - Rclone integration ([#4383])
 - Archive extraction progress ([#4431])

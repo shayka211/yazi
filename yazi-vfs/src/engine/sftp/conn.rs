@@ -5,10 +5,12 @@ use deadpool::managed::Pool;
 use foldhash::fast::FixedState;
 use hashbrown::HashMap;
 use parking_lot::Mutex;
-use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate, agent::AgentIdentity};
+use russh::{client::Handle, keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate, agent::AgentIdentity}};
 use yazi_config::vfs::ServiceSftp;
 use yazi_fs::engine::local::Local;
 use yazi_shared::auth::AuthArc;
+
+use super::{Client, Ssh};
 
 pub(super) static CONN: Mutex<HashMap<AuthArc, Pool<Conn>, FixedState>> =
 	Mutex::new(HashMap::with_hasher(FixedState::with_seed(0)));
@@ -37,16 +39,12 @@ impl russh::client::Handler for Conn {
 
 impl deadpool::managed::Manager for Conn {
 	type Error = io::Error;
-	type Type = yazi_sftp::Operator;
+	type Type = Client;
 
 	async fn create(&self) -> Result<Self::Type, Self::Error> {
-		let channel = self.connect().await.map_err(|e| {
-			io::Error::other(format!("Failed to connect to SFTP server `{}`: {e}", self.config.domain))
-		})?;
-
-		let mut op = yazi_sftp::Operator::make(channel.into_stream());
-		op.init().await?;
-		Ok(op)
+		let ssh = Ssh::make(&self.config).await?;
+		let op = ssh.sftp().await?;
+		Ok(Client { op, ssh })
 	}
 
 	async fn recycle(
@@ -54,7 +52,7 @@ impl deadpool::managed::Manager for Conn {
 		obj: &mut Self::Type,
 		_metrics: &deadpool::managed::Metrics,
 	) -> deadpool::managed::RecycleResult<Self::Error> {
-		if obj.is_closed() {
+		if obj.is_closed() || obj.ssh.is_closed() {
 			Err(deadpool::managed::RecycleError::Message("Channel closed".into()))
 		} else {
 			Ok(())
@@ -72,8 +70,10 @@ impl Conn {
 		}
 
 		let auth = config.auth.clone();
+		// Building only fails when a timeout is set without a runtime, and both are set here
 		let pool = deadpool::managed::Pool::builder(Self { config })
 			.runtime(deadpool::Runtime::Tokio1)
+			// Objects are channels on one shared session, so stay under sshd's default `MaxSessions` of 10
 			.max_size(8)
 			.create_timeout(Some(Duration::from_secs(45)))
 			.build()
@@ -82,48 +82,55 @@ impl Conn {
 		pool
 	}
 
-	async fn connect(&self) -> Result<russh::Channel<russh::client::Msg>, russh::Error> {
+	pub(super) async fn connect(
+		&self,
+		jump: Option<&Handle<Self>>,
+	) -> Result<Handle<Self>, russh::Error> {
 		let pref = Arc::new(russh::client::Config {
 			inactivity_timeout: Some(std::time::Duration::from_secs(60)),
 			keepalive_interval: Some(std::time::Duration::from_secs(10)),
 			..Default::default()
 		});
 
-		let session = if self.config.password.is_some() {
-			self.connect_by_password(pref).await
+		if self.config.password.is_some() {
+			self.connect_by_password(pref, jump).await
 		} else if !self.config.key_file.as_os_str().is_empty()
 			&& !self.config.cert_file.as_os_str().is_empty()
 		{
-			self.connect_by_key_and_cert(pref).await
+			self.connect_by_key_and_cert(pref, jump).await
 		} else if !self.config.key_file.as_os_str().is_empty() {
-			self.connect_by_key(pref).await
+			self.connect_by_key(pref, jump).await
 		} else if !self.config.identity_agent.as_os_str().is_empty() {
-			self.connect_by_agent(pref).await
+			self.connect_by_agent(pref, jump).await
 		} else {
-			self.connect_by_none(pref).await
-		}?;
-
-		let channel = session.channel_open_session().await?;
-		channel.request_subsystem(true, "sftp").await?;
-		Ok(channel)
+			self.connect_by_none(pref, jump).await
+		}
 	}
 
 	async fn session(
 		&self,
 		pref: Arc<russh::client::Config>,
-	) -> Result<russh::client::Handle<Self>, russh::Error> {
-		russh::client::connect(pref, (self.config.host.as_str(), self.config.port), self.clone()).await
+		jump: Option<&Handle<Self>>,
+	) -> Result<Handle<Self>, russh::Error> {
+		let (host, port) = (self.config.host.as_str(), self.config.port);
+		let Some(jump) = jump else {
+			return russh::client::connect(pref, (host, port), self.clone()).await;
+		};
+
+		let tunnel = jump.channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0).await?;
+		russh::client::connect_stream(pref, tunnel.into_stream(), self.clone()).await
 	}
 
 	async fn connect_by_password(
 		&self,
 		pref: Arc<russh::client::Config>,
-	) -> Result<russh::client::Handle<Self>, russh::Error> {
+		jump: Option<&Handle<Self>>,
+	) -> Result<Handle<Self>, russh::Error> {
 		let Some(password) = &self.config.password else {
 			return Err(cfg_err!("Password not provided"));
 		};
 
-		let mut session = self.session(pref).await?;
+		let mut session = self.session(pref, jump).await?;
 		if session.authenticate_password(&self.config.user, password).await?.success() {
 			Ok(session)
 		} else {
@@ -134,7 +141,8 @@ impl Conn {
 	async fn connect_by_key(
 		&self,
 		pref: Arc<russh::client::Config>,
-	) -> Result<russh::client::Handle<Self>, russh::Error> {
+		jump: Option<&Handle<Self>>,
+	) -> Result<Handle<Self>, russh::Error> {
 		let key_file = &self.config.key_file;
 		if key_file.as_os_str().is_empty() {
 			return Err(cfg_err!("Key file not provided"));
@@ -146,7 +154,7 @@ impl Conn {
 			.map_err(|e| cfg_err!("Failed to read key file: {e}"))?;
 		let key = russh::keys::decode_secret_key(&key, self.config.key_passphrase.as_deref())?;
 
-		let mut session = self.session(pref).await?;
+		let mut session = self.session(pref, jump).await?;
 		let result = session
 			.authenticate_publickey(
 				&self.config.user,
@@ -163,7 +171,8 @@ impl Conn {
 	async fn connect_by_key_and_cert(
 		&self,
 		pref: Arc<russh::client::Config>,
-	) -> Result<russh::client::Handle<Self>, russh::Error> {
+		jump: Option<&Handle<Self>>,
+	) -> Result<Handle<Self>, russh::Error> {
 		let key_file = &self.config.key_file;
 		if key_file.as_os_str().is_empty() {
 			return Err(cfg_err!("Key file not provided"));
@@ -205,7 +214,7 @@ impl Conn {
 			}
 		}
 
-		let mut session = self.session(pref).await?;
+		let mut session = self.session(pref, jump).await?;
 		if session.authenticate_openssh_cert(&self.config.user, Arc::new(key), cert).await?.success() {
 			Ok(session)
 		} else {
@@ -216,7 +225,8 @@ impl Conn {
 	async fn connect_by_agent(
 		&self,
 		pref: Arc<russh::client::Config>,
-	) -> Result<russh::client::Handle<Self>, russh::Error> {
+		jump: Option<&Handle<Self>>,
+	) -> Result<Handle<Self>, russh::Error> {
 		let identity_agent = &self.config.identity_agent;
 		if identity_agent.as_os_str().is_empty() {
 			return Err(cfg_err!("Identity agent not provided"));
@@ -230,7 +240,7 @@ impl Conn {
 
 		let identities = agent.request_identities().await?;
 		let identity_count = identities.len();
-		let mut session = self.session(pref).await?;
+		let mut session = self.session(pref, jump).await?;
 
 		let hash_alg = session.best_supported_rsa_hash().await?.flatten();
 		for identity in identities {
@@ -263,8 +273,9 @@ impl Conn {
 	async fn connect_by_none(
 		&self,
 		pref: Arc<russh::client::Config>,
-	) -> Result<russh::client::Handle<Self>, russh::Error> {
-		let mut session = self.session(pref).await?;
+		jump: Option<&Handle<Self>>,
+	) -> Result<Handle<Self>, russh::Error> {
+		let mut session = self.session(pref, jump).await?;
 		if session.authenticate_none(&self.config.user).await?.success() {
 			Ok(session)
 		} else {
